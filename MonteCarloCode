@@ -1,0 +1,539 @@
+MONTE CARLO SIMULATION 
+Igor code to run simulation of 2-step model:
+
+
+function simulGlu_2step()
+
+	variable DS, Pocc, Preocc, Pr,r,rr,pulses,trials,counters, simuinter
+	DS = 4
+	Pocc = 0.3
+	Preocc = 0.9
+	Pr = 0.9
+	r = 0.6
+	rr = 0.15
+	pulses = 8
+	trials = 30
+	counters = 1000
+	simuinter = 200
+	Prompt DS "the number of DS"
+	Prompt Pocc "probability of occupancy at DS"
+	Prompt Preocc "probability of occupancy at RS"
+	Prompt Pr "release probability"
+	Prompt r "probability of replenishment to DS per interpulse interval"
+	Prompt rr "probability of replenishment to RS per interpulse interval"
+	Prompt pulses "the number of pulses"
+	Prompt trials "the number of sweeps in each experiment"
+	Prompt counters "the number of simulations"
+	Prompt simuinter "the number of calculations for each interpulse interval (100-200 is enough)"
+   DoPrompt "Enter parameters", DS, Pocc, Preocc, Pr,r,rr,pulses,trials,counters, simuinter
+	
+	
+	
+	variable trial, counter, spike
+	Variable h, N, rvar
+	variable Rinter, RRinter
+							//Rinter: probability of replenishment to DS per (5ms/simuinter)
+							//RRinter: probability of replenishment to RS per (5ms/simuinter)
+	
+							//an empty docking site has a probability r to be filled during an interval delta_t
+							//Assuming a recovery reaction with a single rate constant R, the link between r and R is r = 1-exp(-R*delta_t)
+							//Here, R = -ln(1-r)/(5ms)
+	
+	Rinter = 1 - exp((ln(1-r))/simuinter)
+	RRinter = 1 - exp((ln(1-rr))/simuinter)
+   //print Rinter, RRinter
+       
+//////////////////////////////////////*******************************************************///////////////////////
+	
+	Make/N=(DS*trials*counters,pulses)/D/O OccuPreDoc  // in order to monitor the occupancy of replacement sites
+	Make/N=(DS*trials*counters,pulses)/D/O OccuDoc  // in order to monitor the occupancy of docking sites during stimulations
+	Make/N=(pulses*counters,trials)/D/O DocVesi
+	Make/N=(pulses*counters,trials)/D/O BinoResponse
+	Make/N=(pulses*counters,trials)/D/O VesiReleased
+	make/N=(DS)/O No			// values of No are either 0 (empty docking site) or 1 (occupied)
+	make/N=(DS)/O Release	// values of Release are either 0 (SV is not released) or 1 (SV is released)
+	make/N=(DS)/O NumRec	// values of NumRec are either 0 (empty replacement site) or 1 (occupied)
+	make/N=(DS)/O Prelease     // in order to change the Pr of recruited vesicle (if needed, not done here)
+//////////////////////////////////////*******************************************************///////////////////////
+//////////////////////////////////////*******************************************************///////////////////////
+
+
+/// "for" loop - for each counter
+	for(counter=0;counter<=(counters-1);counter+=1)  
+
+/// "for" loop - for each trial/sweep
+		for(trial=0;trial<=(trials-1);trial+=1)
+		
+			for(N=0;N<=(DS-1);N+=1)  //// initial occupancy of each DS, RS, and associated Pr for each DS
+				No[N]=binomialNoise(1,Pocc) 
+				NumRec[N] = binomialNoise(1,Preocc)
+				Prelease[N] = Pr
+			endfor
+
+/// "for" loop - for each spike
+			for(spike=0;spike<=(pulses-1);spike+=1)
+			
+				BinoResponse[spike+pulses*(counter)][trial]=0    /// values before the start of the spike
+				VesiReleased[spike+pulses*(counter)][trial]=0
+				DocVesi[spike+pulses*(counter)][trial]=sum(No)  /// total docked SVs before the start of the spike
+
+/// "for" loop - for each docking site
+	        	for(N=0;N<=(DS-1);N+=1)
+					Release[N]=0
+																	///////////   the step of vesicle release
+					If(No[N] == 1)					//if DS is occupied                                                    
+						rvar=sqrt((enoise(1))^2)
+						if(rvar<Prelease[N])
+							Release[N]=1				//Vesicle is released
+							No[N]=0					//DS is now empty
+			       	endif
+	             endif
+			
+
+/// "for" loop - for each "simuinter" step
+                for(h=0;h < simuinter;h+=1)         ////////////    the step of recruitment	
+			    		If(No[N] == 0)                                                 
+		    		   		if (NumRec[N] > 0) 
+					    		rvar=sqrt((enoise(1))^2) 
+				           	if (rvar<Rinter) 
+					           	No[N]=1
+						    		NumRec[N]-=1						
+					    		endif
+				    		else
+				          	rvar=sqrt((enoise(1))^2)
+				          	if(rvar<RRinter)
+				             	NumRec[N] +=1
+				          	endif
+			          	endif
+			      			      
+		          	else
+		                 if (NumRec[N] == 0)
+		                 	rvar=sqrt((enoise(1))^2)
+		                   	if(rvar<RRinter)
+		                    	NumRec[N] +=1
+		                   	endif
+		                 endif
+		            	endif
+					endfor
+/// end of "for" loop of each "simuinter" step
+
+				endfor
+/// end of "for" loop of each docking site
+
+/// Update values after a spike			
+			if(sum(Release)>0)
+				VesiReleased[spike+pulses*(counter)][trial]=sum(Release)
+				BinoResponse[spike+pulses*(counter)][trial]=1
+			endif
+			
+			for(N=0; N<=(DS-1); N+=1)                                                           //for the occupancy of DS and PreDS
+				OccuDoc[N+DS*trial+DS*trials*counter][spike] = No[N]
+			   OccuPreDoc[N+DS*trial+DS*trials*counter][spike] = NumRec[N] 
+			endfor
+			
+		endfor
+/// end of "for" loop for each spike
+	  endfor
+/// end of "for" loop for each trial/sweep
+	endfor
+/// end of "for" loop for each counter
+
+	Matrixtranspose  VesiReleased
+	Matrixtranspose  BinoResponse
+	Matrixtranspose  DocVesi
+	
+	Killwaves No, Release, NumRec, Prelease
+	
+
+
+
+///////////////***************Calculate means and variances*********************//////////////////////
+//"SyncVarAve" and "SyncMeanAve" are waves for variance and mean of the number of events from the simulation
+//"SyncVarCumAve" and "SyncMeanCumAve" are waves for variance and mean of cumulative number.
+
+Make/O/N=(pulses,counters) SyncMeanN2, SyncVarN2
+//Make/O/N=(pulses) Dum11=0
+Make/O/N=(trials) Dum22, Dum32=0, Dum23, Dum33, Dum24, Dum25
+Make/O/N=(pulses,counters) SyncMeanCumN2, SyncVarCumN2, VarOvMeanCumN2
+Make/O/N=(pulses-1, counters) CovarSs
+duplicate/O VesiReleased, CovReleased
+Variable i
+
+for(counter=0;counter<=(counters-1);counter+=1)
+  Dum32=0
+
+ for(i=counter*pulses;i<=((counter+1)*pulses-1);i+=1)
+   Dum22[]= VesiReleased[p][i]
+   Dum32[] += VesiReleased[p][i]
+  
+   wavestats/Q Dum22 //Synchronous release
+  SyncMeanN2[i-counter*pulses][counter] = V_avg
+  SyncVarN2[i-counter*pulses][counter] = V_sdev^2
+  CovReleased[][i] -= V_avg                                                   /////////for covariance[s(n), s(n+1)]
+  if(i > counter*pulses)                                                          ////for covariance[S(n), s(n+1)]
+      Dum23 = Dum22 - V_avg
+      Dum23 *= Dum33
+      wavestats/Q Dum23
+      CovarSs[i-counter*pulses-1][counter] = V_Sum / (trials-1)
+  endif
+      
+  wavestats/Q Dum32 //cumulative synchronous release
+  SyncMeanCumN2[i-counter*pulses][counter] = V_avg
+  SyncVarCumN2[i-counter*pulses][counter] = V_sdev^2
+  VarOvMeanCumN2[i-counter*pulses][counter] = (V_sdev^2)/V_avg
+  Dum33 = Dum32 - V_avg
+  
+ endfor
+
+ //for(i=0;i<=(trials-1);i+=1)
+   //Dum11[] = VesiReleased[i][p]
+   //wavestats/Q Dum11
+   //SyncCumN[i]=V_sum
+ //endfor
+
+endfor
+
+
+Make/O/N=(pulses-1, counters) Covar    ////for covariance[s(n), s(n+1)]
+for(counter=0;counter<=(counters-1);counter+=1)
+ for(i=counter*pulses;i<=((counter+1)*pulses-2);i+=1)
+   Dum24[]= CovReleased[p][i]
+   Dum25[]= CovReleased[p][i+1]
+   Dum24 *= Dum25
+   wavestats/Q Dum24
+   Covar[i-counter*pulses][counter] = V_Sum / (trials-1)
+   
+ endfor
+endfor   
+   
+
+Make/O/N=(pulses) SyncMeanAve, SyncVarAve, SyncMeanCumAve, SyncVarCumAve, VarOvMeanCumAve
+Make/O/N=(pulses-1) CovarSsAve, CovarAve
+Make/O/N=(counters) Dum41, Dum42,  Dum51, Dum52, Dum61 ,Dum53, Dum54
+
+
+for(i=0;i<=pulses-1;i+=1)
+   Dum41[]=SyncMeanN2[i][p]
+   Dum42[]=SyncVarN2[i][p]
+   Dum51[]=SyncMeanCumN2[i][p]
+   Dum52[]=SyncVarCumN2[i][p]
+   Dum61[]=VarOvMeanCumN2[i][p]
+   wavestats/Q Dum41
+   SyncMeanAve[i] = V_avg
+   wavestats/Q Dum42
+   SyncVarAve[i] = V_avg
+   wavestats/Q Dum51
+   SyncMeanCumAve[i] = V_avg
+   wavestats/Q Dum52
+   SyncVarCumAve[i] = V_avg
+   wavestats/Q Dum61
+   VarOvMeanCumAve[i] = V_avg
+endfor
+
+for(i=0; i < pulses-1; i +=1) ////in order to calculate covariance[S(n), s(n+1)] and covariance[s(n), s(n+1)]
+    Dum53[]=CovarSs[i][p]
+    Dum54[]=Covar[i][p]
+    wavestats/Q Dum53
+    CovarSsAve[i] = V_avg
+    wavestats/Q Dum54
+    CovarAve[i] = V_avg
+endfor
+
+Make/O/N=(pulses) OccuAve                          //in order to get the occupancy of docking site
+Make/O/N=(DS*trials*counters) Dum100
+for(i=0;i<=pulses-1;i+=1)
+  Dum100[]=OccuDoc[p][i]
+  wavestats/Q Dum100
+  OccuAve[i] = V_avg
+endfor
+
+Make/O/N=(pulses) OccuPreAve                     // in order to get the occupancy of predocking site
+Make/O/N=(DS*trials*counters) Dum101
+for(i=0;i<=pulses-1;i+=1)
+  Dum101[]=OccuPreDoc[p][i]
+  wavestats/Q Dum101
+  OccuPreAve[i] = V_avg
+endfor
+
+
+
+end
+
+
+///////////////////two-state model by Van
+
+function simulGlu_2state()
+
+	variable DS, Pocc, Preocc, Pr,r,rr,pulses,trials,counters, simuinter
+	DS = 4
+	Pocc = 0.3
+	Preocc = 0.7
+	Pr = 0.9
+	r = 0.6
+	rr = 0.15
+	pulses = 8
+	trials = 30
+	counters = 1000
+	simuinter = 100
+	Prompt DS "the number of DS"
+	Prompt Pocc "probability of occupancy at DS"
+	Prompt Pr "release probability"
+	Prompt r "probability of replenishment to DS per interpulse interval"
+	Prompt rr "probability of replenishment to RS per interpulse interval"
+	Prompt pulses "the number of pulses"
+	Prompt trials "the number of sweeps in each experiment"
+	Prompt counters "the number of simulations"
+	Prompt simuinter "the number of calculations for each interpulse interval (100-200 is enough)"
+   DoPrompt "Enter parameters", DS, Pocc, Pr,r,rr,pulses,trials,counters, simuinter
+	
+	
+	variable trial, counter, spike
+	Variable h, N, rvar
+	variable Rinter, RRinter
+							//Rinter: probability of replenishment to DS per (5ms/simuinter)
+							//RRinter: probability of replenishment to RS per (5ms/simuinter)
+	
+							//an empty docking site has a probability r to be filled during an interval delta_t
+							//Assuming a recovery reaction with a single rate constant R, the link between r and R is r = 1-exp(-R*delta_t)
+							//Here, R = -ln(1-r)/(5ms)
+	
+	Rinter = 1 - exp((ln(1-r))/simuinter)
+	RRinter = 1 - exp((ln(1-rr))/simuinter)
+   //print Rinter, RRinter
+       
+//////////////////////////////////////*******************************************************///////////////////////
+	
+	Make/N=(DS*trials*counters,pulses)/D/O OccuPreDoc  // in order to monitor the occupancy of replacement sites
+	Make/N=(DS*trials*counters,pulses)/D/O OccuDoc  // in order to monitor the occupancy of docking sites during stimulations
+	Make/N=(pulses*counters,trials)/D/O DocVesi
+	Make/N=(pulses*counters,trials)/D/O BinoResponse
+	Make/N=(pulses*counters,trials)/D/O VesiReleased
+	make/N=(DS)/O No			// values of No are either 0 (empty docking site) or 1 (occupied)
+	make/N=(DS)/O Release	// values of Release are either 0 (SV is not released) or 1 (SV is released)
+	make/N=(DS)/O NumRec	// values of NumRec are either 0 (empty replacement site) or 1 (occupied)
+	make/N=(DS)/O Prelease     // in order to change the Pr of recruited vesicle (if needed, not done here)
+//////////////////////////////////////*******************************************************///////////////////////
+//////////////////////////////////////*******************************************************///////////////////////
+
+
+/// "for" loop - for each counter
+	for(counter=0;counter<=(counters-1);counter+=1)  
+
+/// "for" loop - for each trial/sweep
+		for(trial=0;trial<=(trials-1);trial+=1)
+		
+			for(N=0;N<=(DS-1);N+=1)  //// initial occupancy of each DS, RS, and associated Pr for each DS
+				No[N]=binomialNoise(1,Pocc)
+				if (No[N]==1)				/// if DS is occupied, there is no SV at RS
+					NumRec[N] = 0
+					else
+					NumRec[N] = 1			/// if DS is empty, there is an SV at RS
+				endif
+				Prelease[N] = Pr
+			endfor
+
+/// "for" loop - for each spike
+			for(spike=0;spike<=(pulses-1);spike+=1)
+			
+				BinoResponse[spike+pulses*(counter)][trial]=0    /// values before the start of the spike
+				VesiReleased[spike+pulses*(counter)][trial]=0
+				DocVesi[spike+pulses*(counter)][trial]=sum(No)  /// total docked SVs before the start of the spike
+
+/// "for" loop - for each docking site
+	        	for(N=0;N<=(DS-1);N+=1)
+					Release[N]=0
+																	///////////   the step of vesicle release
+					If(No[N] == 1)					//if DS is occupied                                                    
+						rvar=sqrt((enoise(1))^2)
+						if(rvar<Prelease[N])
+							Release[N]=1				//Vesicle is released
+							No[N]=0					//DS is now empty
+			       	endif
+	             endif
+			
+
+/// "for" loop - for each "simuinter" step
+                for(h=0;h < simuinter;h+=1)         ////////////    the step of recruitment	
+			    		If(No[N] == 0)                                                 
+		    		   		if (NumRec[N] > 0) 
+					    		rvar=sqrt((enoise(1))^2) 
+				           	if (rvar<Rinter) 
+					           	No[N]=1
+						    		NumRec[N]-=1						
+					    		endif
+				    		else
+				          	rvar=sqrt((enoise(1))^2)
+				          	if(rvar<RRinter)
+				             	NumRec[N] +=1
+				          	endif
+			          	endif
+			      			      
+//		          	else
+//		                 if (NumRec[N] == 0)			/// if DS is occupied then RS is not replenished
+//		                 	rvar=sqrt((enoise(1))^2)
+//		                   	if(rvar<RRinter)
+//		                    	NumRec[N] +=1
+//		                   	endif
+//		                 endif
+		            	endif
+					endfor
+/// end of "for" loop of each "simuinter" step
+
+				endfor
+/// end of "for" loop of each docking site
+
+/// Update values after a spike			
+			if(sum(Release)>0)
+				VesiReleased[spike+pulses*(counter)][trial]=sum(Release)
+				BinoResponse[spike+pulses*(counter)][trial]=1
+			endif
+			
+			for(N=0; N<=(DS-1); N+=1)                                                           //for the occupancy of DS and PreDS
+				OccuDoc[N+DS*trial+DS*trials*counter][spike] = No[N]
+			   OccuPreDoc[N+DS*trial+DS*trials*counter][spike] = NumRec[N] 
+			endfor
+			
+		endfor
+/// end of "for" loop for each spike
+	  endfor
+/// end of "for" loop for each trial/sweep
+	endfor
+/// end of "for" loop for each counter
+
+	Matrixtranspose  VesiReleased
+	Matrixtranspose  BinoResponse
+	Matrixtranspose  DocVesi
+	
+	Killwaves No, Release, NumRec, Prelease
+	
+
+
+
+///////////////***************Calculate means and variances*********************//////////////////////
+//"SyncVarAve" and "SyncMeanAve" are waves for variance and mean of the number of events from the simulation
+//"SyncVarCumAve" and "SyncMeanCumAve" are waves for variance and mean of cumulative number.
+
+Make/O/N=(pulses,counters) SyncMeanN2, SyncVarN2
+//Make/O/N=(pulses) Dum11=0
+Make/O/N=(trials) Dum22, Dum32=0, Dum23, Dum33, Dum24, Dum25
+Make/O/N=(pulses,counters) SyncMeanCumN2, SyncVarCumN2, VarOvMeanCumN2
+Make/O/N=(pulses-1, counters) CovarSs
+duplicate/O VesiReleased, CovReleased
+Variable i
+
+for(counter=0;counter<=(counters-1);counter+=1)
+  Dum32=0
+
+ for(i=counter*pulses;i<=((counter+1)*pulses-1);i+=1)
+   Dum22[]= VesiReleased[p][i]
+   Dum32[] += VesiReleased[p][i]
+  
+   wavestats/Q Dum22 //Synchronous release
+  SyncMeanN2[i-counter*pulses][counter] = V_avg
+  SyncVarN2[i-counter*pulses][counter] = V_sdev^2
+  CovReleased[][i] -= V_avg                                                   /////////for covariance[s(n), s(n+1)]
+  if(i > counter*pulses)                                                          ////for covariance[S(n), s(n+1)]
+      Dum23 = Dum22 - V_avg
+      Dum23 *= Dum33
+      wavestats/Q Dum23
+      CovarSs[i-counter*pulses-1][counter] = V_Sum / (trials-1)
+  endif
+      
+  wavestats/Q Dum32 //cumulative synchronous release
+  SyncMeanCumN2[i-counter*pulses][counter] = V_avg
+  SyncVarCumN2[i-counter*pulses][counter] = V_sdev^2
+  VarOvMeanCumN2[i-counter*pulses][counter] = (V_sdev^2)/V_avg
+  Dum33 = Dum32 - V_avg
+  
+ endfor
+
+ //for(i=0;i<=(trials-1);i+=1)
+   //Dum11[] = VesiReleased[i][p]
+   //wavestats/Q Dum11
+   //SyncCumN[i]=V_sum
+ //endfor
+
+endfor
+
+
+Make/O/N=(pulses-1, counters) Covar    ////for covariance[s(n), s(n+1)]
+for(counter=0;counter<=(counters-1);counter+=1)
+ for(i=counter*pulses;i<=((counter+1)*pulses-2);i+=1)
+   Dum24[]= CovReleased[p][i]
+   Dum25[]= CovReleased[p][i+1]
+   Dum24 *= Dum25
+   wavestats/Q Dum24
+   Covar[i-counter*pulses][counter] = V_Sum / (trials-1)
+   
+ endfor
+endfor   
+   
+
+Make/O/N=(pulses) SyncMeanAve, SyncVarAve, SyncMeanCumAve, SyncVarCumAve, VarOvMeanCumAve
+Make/O/N=(pulses-1) CovarSsAve, CovarAve
+Make/O/N=(counters) Dum41, Dum42,  Dum51, Dum52, Dum61 ,Dum53, Dum54
+
+
+for(i=0;i<=pulses-1;i+=1)
+   Dum41[]=SyncMeanN2[i][p]
+   Dum42[]=SyncVarN2[i][p]
+   Dum51[]=SyncMeanCumN2[i][p]
+   Dum52[]=SyncVarCumN2[i][p]
+   Dum61[]=VarOvMeanCumN2[i][p]
+   wavestats/Q Dum41
+   SyncMeanAve[i] = V_avg
+   wavestats/Q Dum42
+   SyncVarAve[i] = V_avg
+   wavestats/Q Dum51
+   SyncMeanCumAve[i] = V_avg
+   wavestats/Q Dum52
+   SyncVarCumAve[i] = V_avg
+   wavestats/Q Dum61
+   VarOvMeanCumAve[i] = V_avg
+endfor
+
+for(i=0; i < pulses-1; i +=1) ////in order to calculate covariance[S(n), s(n+1)] and covariance[s(n), s(n+1)]
+    Dum53[]=CovarSs[i][p]
+    Dum54[]=Covar[i][p]
+    wavestats/Q Dum53
+    CovarSsAve[i] = V_avg
+    wavestats/Q Dum54
+    CovarAve[i] = V_avg
+endfor
+
+Make/O/N=(pulses) OccuAve                          //in order to get the occupancy of docking site
+Make/O/N=(DS*trials*counters) Dum100
+for(i=0;i<=pulses-1;i+=1)
+  Dum100[]=OccuDoc[p][i]
+  wavestats/Q Dum100
+  OccuAve[i] = V_avg
+endfor
+
+Make/O/N=(pulses) OccuPreAve                     // in order to get the occupancy of predocking site
+Make/O/N=(DS*trials*counters) Dum101
+for(i=0;i<=pulses-1;i+=1)
+  Dum101[]=OccuPreDoc[p][i]
+  wavestats/Q Dum101
+  OccuPreAve[i] = V_avg
+endfor
+
+
+
+end
+
+Function Parab(w,x) : FitFunc
+	Wave w
+	Variable x
+
+	//CurveFitDialog/ These comments were created by the Curve Fitting dialog. Altering them will
+	//CurveFitDialog/ make the function less convenient to work with in the Curve Fitting dialog.
+	//CurveFitDialog/ Equation:
+	//CurveFitDialog/ f(x) = x - ((x^2)/N)
+	//CurveFitDialog/ End of Equation
+	//CurveFitDialog/ Independent Variables 1
+	//CurveFitDialog/ x
+	//CurveFitDialog/ Coefficients 1
+	//CurveFitDialog/ w[0] = N
+
+	return x - ((x^2)/w[0])
+End
